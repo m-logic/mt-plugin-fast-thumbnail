@@ -7,7 +7,7 @@ use MT::Plugin;
 @MT::Plugin::FastThumbnail::ISA = qw(MT::Plugin);
 
 my $PLUGIN_NAME = 'FastThumbnail';
-my $VERSION = '1.0';
+my $VERSION = '1.2';
 my $plugin = new MT::Plugin::FastThumbnail({
     name => $PLUGIN_NAME,
     version => $VERSION,
@@ -35,12 +35,59 @@ use constant _FT_SKIPMAGICK  => 0;
 
 if (MT->version_number >= 5.14) { # required MT5.14
 
+    my $jpeg_quality;
+    my $png_quality;
+    if (MT->version_number >= 6.2) {
+        $jpeg_quality = MT->config->ImageQualityJpeg || 0;
+        $png_quality = MT->config->ImageQualityPng || 0;
+        unless ($jpeg_quality && $jpeg_quality =~ /^\d{1,3}$/ && $jpeg_quality <= 100) {
+            $jpeg_quality = 75; # default
+        }
+        unless ($png_quality && $png_quality =~ /^\d{1}$/ && $png_quality <= 9) {
+            $png_quality = 7; # default
+        }
+        # For the MNG and PNG image formats, the quality value sets the zlib compression level (quality / 10) and filter-type (quality % 10).
+        # The default PNG "quality" is 75, which means compression level 7 with adaptive PNG filtering, unless the image has a color map, in which case it means compression level 7 with no PNG filtering.
+        $png_quality = $png_quality * 10 + 5;
+    }
+    else {
+        $jpeg_quality = 75;
+        $png_quality = 75;
+    }
+
     my $saved_has_thumbnail = \&MT::Asset::Image::has_thumbnail;
     my $saved_thumbnail_file = \&MT::Asset::Image::thumbnail_file;
     {
         local $SIG{__WARN__} = sub {};
         *has_thumbnail      = \&new_has_thumbnail;
         *thumbnail_file     = \&new_thumbnail_file;
+    }
+
+    sub _log {
+        my ($message, $category, $level) = @_;
+
+        $level ||= MT::Log::INFO();
+        $message = Encode::encode_utf8($message) if Encode::is_utf8($message);
+        MT->log(
+            {   class    => 'system',
+                category => $category,
+                level    => $level,
+                message  => $message,
+            }
+        );
+        return;
+    }
+
+    sub log_error {
+        my $message = shift;
+        my $category = shift || $PLUGIN_NAME;
+        return _log($message, $category, MT::Log::ERROR());
+    }
+
+    sub log_info {
+        my $message = shift;
+        my $category = shift || $PLUGIN_NAME;
+        return _log($message, $category, MT::Log::INFO());
     }
 
     sub new_has_thumbnail {
@@ -182,6 +229,7 @@ if (MT->version_number >= 5.14) { # required MT5.14
         return undef unless $fmgr->can_write($asset_cache_path);
     
         my $convert = MT->config('ConvertPath') || '';
+        $convert = '' unless -f $convert;
         eval { require Image::Magick };
         my $has_magick = $@ ? 0 : 1;
     
@@ -200,8 +248,16 @@ if (MT->version_number >= 5.14) { # required MT5.14
         {
             $data = $fmgr->get_data( $file_path, 'upload' );
         }
-        elsif (!_FT_SKIPCONVERT && defined $convert && -f $convert) {
-            my $q;
+        elsif (!_FT_SKIPCONVERT && $convert) {
+            my $quality;
+            my $ext = lc($param{Type} || $asset->file_ext || '');
+            if ($ext =~ /^jpe?g$/) {
+                $quality = $jpeg_quality;
+            }
+            elsif ($ext eq 'png') {
+                $quality = $png_quality;
+            }
+            my $q = $quality ? " -quality $quality " : '';
             my $cmd = '"' . $convert . '"'
                  . ' -size ' . $r_w . 'x' . $r_h 
                  . ' ' . $file_path . $q 
@@ -213,17 +269,15 @@ if (MT->version_number >= 5.14) { # required MT5.14
             my $r;
             $r = system( $cmd );
             if (_FT_DEBUG) {
-                require MT::Log;
-                my $log = MT::Log->new; 
-                $log->message(
+                log_info(
                     'useconvert:' . $file_path . '=>' . $thumbnail . ' '
                     . '/Resize:[' . $i_w . ',' . $i_h . ']=>[' . $n_w . ',' . $n_h . '] '
                     . ( $param{Type} ? ('/Convert:' . $param{Type} . ' ') : '' )
                     . ( $param{Square} ? ('/Square:' . $param{Square} . ' ') : '' )
+                    . ( $quality ? ('/Quality:' . $quality . ' ') : '' )
                     . '/Result:' . ( $r ? 'failed' : 'success' ) . ' '
                     . '/Time:' . (Time::HiRes::time() - $start_process_time) . 'msec'
                 );
-                $log->save or die $log->errstr;
             }
             return ( $thumbnail, $n_w, $n_h );
         }
@@ -244,19 +298,27 @@ if (MT->version_number >= 5.14) { # required MT5.14
                 my $type = uc $param{Type};
                 eval { $r ||= $image->Set( magick => $type ); };
             }
+            my $ext = lc($param{Type} || $asset->file_ext || '');
+            my $quality;
+            if ($ext =~ /^jpe?g$/) {
+                eval { $r ||= $image->Set( quality => $jpeg_quality ); };
+                $quality = $jpeg_quality;
+            }
+            elsif ($ext eq 'png') {
+                eval { $r ||= $image->Set( quality => $png_quality ); };
+                $quality = $png_quality;
+            }
             eval { $r ||= $image->Write(filename=>$thumbnail); };
             if (_FT_DEBUG) {
-                require MT::Log;
-                my $log = MT::Log->new; 
-                $log->message(
+                log_info(
                     'usemagick:' . $file_path . '=>' . $thumbnail . ' '
                     . '/Resize:[' . $i_w . ',' . $i_h . ']=>[' . $n_w . ',' . $n_h . '] '
                     . ( $param{Type} ? ('/Convert:' . $param{Type} . ' ') : '' )
                     . ( $param{Square} ? ('/Square:' . $param{Square} . ' ') : '' )
+                    . ( $quality ? ('/Quality:' . $quality . ' ') : '' )
                     . '/Result:' . ($r ? $r : 'success') . ' '
                     . '/Time:' . (Time::HiRes::time() - $start_process_time) . 'msec'
                 );
-                $log->save or die $log->errstr;
             }
             return ( $thumbnail, $n_w, $n_h );
         }
@@ -289,9 +351,7 @@ if (MT->version_number >= 5.14) { # required MT5.14
             MT->translate( "Error creating thumbnail file: [_1]", $fmgr->errstr )
             );
         if (_FT_DEBUG) {
-            require MT::Log;
-            my $log = MT::Log->new; 
-            $log->message(
+            log_info(
                 'legacyresize:' . $file_path . '=>' . $thumbnail . ' '
                 . '/Resize:[' . $i_w . ',' . $i_h . ']=>[' . $n_w . ',' . $n_h . '] '
                 . ( $param{Type} ? ('/Convert:' . $param{Type} . ' ') : '' )
@@ -299,7 +359,6 @@ if (MT->version_number >= 5.14) { # required MT5.14
                 . '/Result: success '
                 . '/Time:' . (Time::HiRes::time() - $start_process_time) . 'msec'
             );
-            $log->save or die $log->errstr;
         }
         return ( $thumbnail, $n_w, $n_h );
     }

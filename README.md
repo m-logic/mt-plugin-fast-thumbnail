@@ -4,7 +4,7 @@ This plugin enables to speed up processing of thumbnails.
 
 ## Requirements
 
-* Movable Type 5.14+ / 5.2+ / 6.0+
+* Movable Type 5.14+ / 5.2+ / 6.x / 7.0
 * ImageMagick
 
 ## Installation
