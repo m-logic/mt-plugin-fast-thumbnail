@@ -4,7 +4,7 @@ This plugin enables to speed up processing of thumbnails.
 
 ## Requirements
 
-* Movable Type 5.14+ / 5.2+ / 6.x / 7.0
+* Movable Type 7.9(r.5004) / 8 / 9
 * ImageMagick
 
 ## Installation
@@ -20,4 +20,4 @@ The MIT License (MIT)
 
 The following copyright notice applies to all the files provided in this distribution, including binary files, unless explicitly noted otherwise.
 
-Copyright 2014 M-Logic, Inc.
+Copyright 2014- M-Logic, Inc.

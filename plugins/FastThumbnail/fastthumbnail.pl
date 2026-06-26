@@ -14,7 +14,7 @@ my $plugin = new MT::Plugin::FastThumbnail({
     name => $PLUGIN_NAME,
     version => $VERSION,
     description => '<MT_TRANS phrase="This plugin enables to speed up processing of thumbnails.">',
-    doc_link => 'http://labs.m-logic.jp/plugins/fastthumbnail/docs/' . $VERSION . '/fastthumbnail.html',
+    doc_link => 'https://labs.m-logic.jp/plugins/fastthumbnail/docs/' . $VERSION . '/fastthumbnail.html',
     author_name => 'M-Logic, Inc.',
     author_link => 'https://m-logic.co.jp/',
     l10n_class  => 'FastThumbnail::L10N',
@@ -57,8 +57,10 @@ sub init_app {
         require MT::Asset::Image;
         no warnings 'once';
         no warnings 'redefine';
-        $ft_saved_has_thumbnail = \&MT::Asset::Image::has_thumbnail;
-        $ft_saved_thumbnail_file = \&MT::Asset::Image::thumbnail_file;
+        unless ($ft_saved_thumbnail_file) {
+            $ft_saved_has_thumbnail  = \&MT::Asset::Image::has_thumbnail;
+            $ft_saved_thumbnail_file = \&MT::Asset::Image::thumbnail_file;
+        }
         *MT::Asset::Image::has_thumbnail  = \&ft_has_thumbnail;
         *MT::Asset::Image::thumbnail_file = \&ft_thumbnail_file;
     }
@@ -125,9 +127,29 @@ sub ft_has_thumbnail {
     }
 }
 
+sub ft_needs_original {
+    my $asset = shift;
+
+    my $ext = lc( $asset->file_ext || '' );
+    # TIFF handling is version-dependent (guarded since 7.9.3); always defer.
+    return 1 if $ext =~ /^tiff?$/;
+    # Only JPEG/WebP carry an EXIF orientation that MT and browsers act on.
+    return 0 unless $ext =~ /^(?:jpe?g|webp)$/;
+
+    # Orientation tag handling is version-dependent (since 8.5.0)
+    my $exif = eval { $asset->exif } or return 0;
+    my $o = $exif->GetValue('Orientation');
+    return ( $o && $o =~ /rotate|mirror/i ) ? 1 : 0;
+}
+
 sub ft_thumbnail_file {
     my $asset = shift;
     my (%param) = @_;
+
+    # Delegate to the original implementation.
+    if ( $ft_saved_thumbnail_file && ft_needs_original($asset) ) {
+        return $ft_saved_thumbnail_file->( $asset, %param );
+    }
 
     my $fmgr;
     my $blog = $param{Blog} || $asset->blog;
@@ -308,6 +330,9 @@ sub ft_thumbnail_file {
             my $x = int(($r_w - $n_w) / 2);
             my $y = int(($r_h - $n_h) / 2);
             eval { $r ||= $image->Crop('width' => $n_w, 'height' => $n_h, 'x' => $x, 'y' => $y); };
+            # Crop leaves a virtual canvas (page geometry); reset it so canvas-aware
+            # formats such as GIF do not retain the pre-crop logical screen size.
+            eval { $image->Set( page => '+0+0' ); };
         }
         if ($param{Type}) {
             my $type = uc $param{Type};
