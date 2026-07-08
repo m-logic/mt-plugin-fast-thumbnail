@@ -295,17 +295,18 @@ sub ft_thumbnail_file {
         elsif ($ext eq 'png') {
             $quality = $png_quality;
         }
-        my $q = $quality ? " -quality $quality " : '';
-        my $cmd = '"' . $convert . '"'
-             . ' -size ' . $r_w . 'x' . $r_h
-             . ' ' . $file_path . $q
-             . ' -thumbnail ' . $r_w . 'x' . $r_h
-             . ( $param{Square} ? ' -gravity center' : '' )
-             . ' -extent ' . $n_w . 'x' . $n_h
-             . ( $param{Type} ? ' -format ' . uc($param{Type}) : '' )
-             . ' ' . $thumbnail;
-        my $r;
-        $r = system( $cmd );
+        # Use the list form of system() so paths containing spaces or shell
+        # metacharacters are passed to convert unmodified.
+        my @cmd = ( $convert,
+             '-size', $r_w . 'x' . $r_h,
+             $file_path,
+             ( $quality ? ( '-quality', $quality ) : () ),
+             '-thumbnail', $r_w . 'x' . $r_h,
+             ( $param{Square} ? ( '-gravity', 'center' ) : () ),
+             '-extent', $n_w . 'x' . $n_h,
+             ( $param{Type} ? ( '-format', uc($param{Type}) ) : () ),
+             $thumbnail );
+        my $r = system( @cmd );
         if ($MT::DebugMode) {
             log_info(
                 'useconvert:' . $file_path . '=>' . $thumbnail . ' '
@@ -315,6 +316,12 @@ sub ft_thumbnail_file {
                 . ( $quality ? ('/Quality:' . $quality . ' ') : '' )
                 . '/Result:' . ( $r ? 'failed' : 'success' ) . ' '
                 . '/Time:' . (Time::HiRes::time() - $start_process_time) . 'msec'
+            );
+        }
+        if ($r) {
+            return $asset->error(
+                MT->translate( "Error creating thumbnail file: [_1]",
+                    'convert exited with status ' . ( $r >> 8 ) )
             );
         }
     }
